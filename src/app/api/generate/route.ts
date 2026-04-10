@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import OpenAI from "openai";
+import Anthropic from "@anthropic-ai/sdk";
 import { buildPrompt } from "@/lib/prompts";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 
-function getOpenAI() {
-  return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+function getClient() {
+  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 }
 
 export async function POST(req: NextRequest) {
@@ -19,48 +19,56 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "画像が必要です" }, { status: 400 });
     }
 
-    // Convert image to base64
     const bytes = await imageFile.arrayBuffer();
-    const base64 = btoa(
-      new Uint8Array(bytes).reduce(
-        (data, byte) => data + String.fromCharCode(byte),
-        ""
-      )
-    );
-    const mimeType = imageFile.type || "image/jpeg";
+    const base64 = Buffer.from(bytes).toString("base64");
+    const mimeType = (imageFile.type || "image/jpeg") as
+      | "image/jpeg"
+      | "image/png"
+      | "image/gif"
+      | "image/webp";
 
     const prompt = buildPrompt(platform, category || undefined);
 
-    const openai = getOpenAI();
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o",
+    const client = getClient();
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
       max_tokens: 2000,
       messages: [
         {
           role: "user",
           content: [
-            { type: "text", text: prompt },
             {
-              type: "image_url",
-              image_url: {
-                url: `data:${mimeType};base64,${base64}`,
-                detail: "high",
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: mimeType,
+                data: base64,
               },
             },
+            { type: "text", text: prompt },
           ],
         },
       ],
     });
 
-    const text = response.choices[0]?.message?.content || "";
-    const usage = response.usage;
+    const text = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => {
+        if (b.type === "text") return b.text;
+        return "";
+      })
+      .join("");
+
+    const tokens =
+      (response.usage?.input_tokens || 0) +
+      (response.usage?.output_tokens || 0);
 
     return NextResponse.json({
       result: text,
       platform,
       category,
-      tokens: usage?.total_tokens || 0,
-      model: "gpt-4o",
+      tokens,
+      model: "claude-sonnet-4-20250514",
     });
   } catch (error: unknown) {
     const message =
